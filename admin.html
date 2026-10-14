@@ -1,0 +1,248 @@
+
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>لوحة إدارة قدرات وتحصيلي</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:Arial,sans-serif;background:#f1f5f9;color:#17243b}
+header{background:#142d50;color:white;padding:22px}
+main{max-width:1100px;margin:auto;padding:18px}
+.card,.stat{background:white;border-radius:12px;padding:18px;margin-bottom:15px;box-shadow:0 3px 12px #1020400c}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:12px}
+.number{font-size:27px;font-weight:bold;margin-top:10px}
+input,button{padding:12px;border-radius:8px;font-size:15px}
+input{border:1px solid #ccd5e2;width:100%;margin:6px 0}
+button{border:0;background:#185adb;color:white;cursor:pointer;margin:5px 0}
+table{width:100%;border-collapse:collapse;min-width:600px}
+th,td{text-align:right;padding:12px;border-bottom:1px solid #e8edf4}
+th{background:#f7f9fc}
+.table-wrap{overflow-x:auto}
+.muted{color:#65748b}
+#app{display:none}
+</style>
+</head>
+<body>
+<header>
+<h2>لوحة إدارة قدرات وتحصيلي</h2>
+<p>إدارة المستخدمين والاشتراكات</p>
+</header>
+
+<main>
+<section id="login" class="card">
+<h3>دخول المدير</h3>
+<input id="email" type="email" placeholder="البريد الإلكتروني">
+<input id="password" type="password" placeholder="كلمة المرور">
+<button id="loginBtn">تسجيل الدخول</button>
+<p id="message">أدخل بيانات حساب المدير.</p>
+</section>
+
+<section id="app">
+<div class="card">
+<button id="refreshBtn">تحديث البيانات</button>
+<button id="logoutBtn">تسجيل الخروج</button>
+<p id="notice" class="muted"></p>
+</div>
+
+<div class="stats">
+<div class="stat">إجمالي المستخدمين<div id="usersCount" class="number">—</div></div>
+<div class="stat">إجمالي الاشتراكات<div id="subsCount" class="number">—</div></div>
+<div class="stat">الاشتراكات الفعالة<div id="activeCount" class="number">—</div></div>
+<div class="stat">الاشتراكات المنتهية<div id="expiredCount" class="number">—</div></div>
+</div>
+
+<section class="card">
+<h3>المستخدمون</h3>
+<input id="search" placeholder="ابحث بالاسم أو البريد أو المعرّف">
+<div class="table-wrap">
+<table>
+<thead><tr><th>الاسم</th><th>البريد</th><th>معرّف المستخدم</th></tr></thead>
+<tbody id="usersBody"></tbody>
+</table>
+</div>
+</section>
+
+<section class="card">
+<h3>الاشتراكات</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>المستخدم</th><th>الباقة</th><th>الحالة</th><th>تاريخ الانتهاء</th></tr></thead>
+<tbody id="subsBody"></tbody>
+</table>
+</div>
+</section>
+</section>
+</main>
+
+<script>
+const SUPABASE_URL =
+"https://yyrsnskckowrullswzhy.supabase.co";
+
+const SUPABASE_KEY =
+"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl5cnNuc2tja293cnVsbHN3emh5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTEwMzkyMTYsImV4cCI6MjEwNjYxNTIxNn0.oEi6feFSMNFV8-l6vuBfiFeGi8H-4JVFl7Inx5MYU6U";
+
+const db = window.supabase.createClient(
+  SUPABASE_URL, SUPABASE_KEY
+);
+
+const $ = id => document.getElementById(id);
+let profiles = [];
+let subscriptions = [];
+
+function message(text) {
+  $("message").textContent = text;
+}
+
+function makeRow(values) {
+  const tr = document.createElement("tr");
+  values.forEach(value => {
+    const td = document.createElement("td");
+    td.textContent = value == null ? "—" : String(value);
+    tr.appendChild(td);
+  });
+  return tr;
+}
+
+function renderUsers() {
+  const term = $("search").value.trim().toLowerCase();
+  const body = $("usersBody");
+  body.replaceChildren();
+
+  profiles.filter(p =>
+    [p.full_name, p.email, p.id]
+      .some(v => String(v || "").toLowerCase().includes(term))
+  ).forEach(p => {
+    body.appendChild(makeRow([p.full_name, p.email, p.id]));
+  });
+}
+
+function renderSubscriptions() {
+  const body = $("subsBody");
+  body.replaceChildren();
+
+  const names = new Map(
+    profiles.map(p => [p.id, p.full_name || p.email || p.id])
+  );
+
+  subscriptions.forEach(s => {
+    body.appendChild(makeRow([
+      names.get(s.user_id) || s.user_id,
+      s.plan,
+      s.status,
+      s.expires_at
+        ? new Date(s.expires_at).toLocaleDateString("ar-SA")
+        : "غير محدد"
+    ]));
+  });
+}
+
+async function loadDashboard() {
+  $("notice").textContent = "جارٍ تحميل البيانات...";
+
+  const { data: userData, error: userError } =
+    await db.auth.getUser();
+
+  if (userError || !userData.user) {
+    $("notice").textContent = "سجّل الدخول مجددًا.";
+    return;
+  }
+
+  const { data: claimsData, error: claimsError } =
+    await db.auth.getClaims();
+
+  if (claimsError ||
+      claimsData?.claims?.app_metadata?.role !== "admin") {
+    $("notice").textContent =
+      "حسابك ليس مديرًا. تحقق من app_metadata.role.";
+    return;
+  }
+
+  const [pResult, sResult] = await Promise.all([
+    db.from("profiles")
+      .select("id,full_name,email,created_at")
+      .order("created_at", {ascending:false})
+      .limit(1000),
+
+    db.from("user_subscriptions")
+      .select("user_id,plan,status,expires_at,created_at")
+      .order("created_at", {ascending:false})
+      .limit(1000)
+  ]);
+
+  if (pResult.error || sResult.error) {
+    console.error(pResult.error, sResult.error);
+    $("notice").textContent =
+      "تعذر تحميل البيانات. تحقق من الجداول وسياسات RLS.";
+    return;
+  }
+
+  profiles = pResult.data || [];
+  subscriptions = sResult.data || [];
+
+  const now = Date.now();
+
+  const active = subscriptions.filter(s =>
+    s.status === "active" &&
+    ["plus","premium"].includes(s.plan) &&
+    (!s.expires_at || Date.parse(s.expires_at) > now)
+  );
+
+  const expired = subscriptions.filter(s =>
+    s.status === "expired" ||
+    (s.expires_at && Date.parse(s.expires_at) <= now)
+  );
+
+  $("usersCount").textContent = profiles.length;
+  $("subsCount").textContent = subscriptions.length;
+  $("activeCount").textContent = active.length;
+  $("expiredCount").textContent = expired.length;
+
+  renderUsers();
+  renderSubscriptions();
+  $("notice").textContent = "تم تحميل البيانات.";
+}
+
+$("loginBtn").onclick = async () => {
+  message("جارٍ تسجيل الدخول...");
+
+  const { error } = await db.auth.signInWithPassword({
+    email: $("email").value.trim(),
+    password: $("password").value
+  });
+
+  if (error) {
+    message("تعذر الدخول. تحقق من البريد وكلمة المرور.");
+    return;
+  }
+
+  const { data, error: claimsError } = await db.auth.getClaims();
+
+  if (claimsError ||
+      data?.claims?.app_metadata?.role !== "admin") {
+    await db.auth.signOut();
+    message("هذا الحساب لا يملك صلاحيات المدير.");
+    return;
+  }
+
+  $("login").style.display = "none";
+  $("app").style.display = "block";
+  await loadDashboard();
+};
+
+$("refreshBtn").onclick = loadDashboard;
+$("search").oninput = renderUsers;
+
+$("logoutBtn").onclick = async () => {
+  await db.auth.signOut();
+  profiles = [];
+  subscriptions = [];
+  $("app").style.display = "none";
+  $("login").style.display = "block";
+  message("تم تسجيل الخروج.");
+};
+</script>
+</body>
+</html>
